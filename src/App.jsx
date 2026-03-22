@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
+import stockSeed from "./data/stockSeed.json";
 
 /**
  * =========================================================
@@ -83,31 +84,10 @@ const WAREHOUSE_ZONES = [
 
 /**
  * =========================================================
- * SAMPLE LOTS
+ * MOCK DATA
  * =========================================================
+ * Loaded from ./data/stockSeed.json
  */
-const initialLots = [
-  { id: 1, sku: "BBLA047-1", lot: "17014", qty: 120, locationCode: "A1", slotId: "A-1-1-L", zone: "A", productType: "fg" },
-  { id: 2, sku: "BBLA047-1", lot: "18014", qty: 80, locationCode: "A1", slotId: "A-1-1-R", zone: "A", productType: "fg" },
-  { id: 3, sku: "BBLA052-2", lot: "21024", qty: 60, locationCode: "A2", slotId: "A-2-2-L", zone: "A", productType: "fg" },
-
-  { id: 4, sku: "BBCA088-3", lot: "17024", qty: 40, locationCode: "B18", slotId: "B-3-18-R", zone: "B", productType: "fg" },
-  { id: 5, sku: "BBLA061-1", lot: "02025", qty: 90, locationCode: "C7", slotId: "C-2-7-L", zone: "C", productType: "fg" },
-
-  { id: 6, sku: "BBLA047-1", lot: "01025", qty: 35, locationCode: "E1", slotId: "E-1-1", zone: "E", productType: "fg" },
-  { id: 7, sku: "BBCA088-3", lot: "02025", qty: 20, locationCode: "E2", slotId: "E-2-2", zone: "E", productType: "fg" },
-  { id: 8, sku: "BBLA061-1", lot: "03025", qty: 50, locationCode: "F4", slotId: "F-4-10", zone: "F", productType: "fg" },
-
-  { id: 9, sku: "UBLA047-1", lot: "15024", qty: 55, locationCode: "G1", slotId: "G-1-1-L", zone: "G", productType: "semi-fg" },
-  { id: 10, sku: "UBLA047-1", lot: "16024", qty: 70, locationCode: "G1", slotId: "G-1-1-R", zone: "G", productType: "semi-fg" },
-  { id: 11, sku: "UBCA088-3", lot: "05025", qty: 30, locationCode: "I6", slotId: "I-1-6-L", zone: "I", productType: "semi-fg" },
-  { id: 12, sku: "UBCA091-2", lot: "06025", qty: 25, locationCode: "J10", slotId: "J-5-10-R", zone: "J", productType: "semi-fg" },
-  { id: 13, sku: "BBHA001-1", lot: "01025", qty: 44, locationCode: "H1", slotId: "H-1-1-L", zone: "H", productType: "fg" },
-
-  { id: 14, sku: "BBLA047-1", lot: "07025", qty: 100, locationCode: "Q1", slotId: "Q1-1-1", zone: "Q", status: "Waiting to be Dispatch", productType: "fg" },
-  { id: 15, sku: "BBCA088-3", lot: "08025", qty: 65, locationCode: "Q2", slotId: "Q2-2-3", zone: "Q", status: "Loading", productType: "fg" },
-  { id: 16, sku: "UBLA047-1", lot: "09025", qty: 85, locationCode: "P", slotId: "P-1-1", zone: "P", status: "Waiting to be Dispatch", productType: "semi-fg" },
-];
 
 /**
  * =========================================================
@@ -189,6 +169,105 @@ function deriveLocationCodeFromSlot(slotId, zone) {
   }
 
   return slotId;
+}
+
+function deriveZoneFromRawRecord(raw) {
+  const explicitZone = String(raw.zone || "").trim().toUpperCase();
+  if (explicitZone) return explicitZone;
+
+  const log = String(raw.log || raw.slotCode || raw.locationCode || "").trim().toUpperCase();
+  if (log) {
+    if (log.startsWith("Q1")) return "Q";
+    if (log.startsWith("Q2")) return "Q";
+    const match = log.match(/^[A-Z]+/);
+    if (match) return match[0].charAt(0);
+  }
+
+  const existingSlotId = String(
+    raw.slotId || raw.targetSlotId || raw.suggestedSlotId || ""
+  )
+    .trim()
+    .toUpperCase();
+  if (existingSlotId) {
+    const prefix = existingSlotId.split("-")[0];
+    if (prefix === "Q1" || prefix === "Q2") return "Q";
+    return prefix.charAt(0);
+  }
+
+  return "";
+}
+
+function normalizeSlotIdFromRecord(raw) {
+  const zone = deriveZoneFromRawRecord(raw);
+  const log = String(raw.log || raw.slotCode || raw.locationCode || "")
+    .trim()
+    .toUpperCase();
+  const existing = String(
+    raw.slotId || raw.targetSlotId || raw.suggestedSlotId || ""
+  )
+    .trim()
+    .toUpperCase();
+
+  const rowIndex = Math.max(1, Number(raw.rowIndexInLog || 1));
+
+  if (["A", "B", "C", "G", "H", "I", "J", "K", "L", "M"].includes(zone)) {
+    const logNumber = Number.parseInt(log.replace(/^[A-Z]+/, ""), 10);
+    if (Number.isFinite(logNumber)) {
+      const level = ((logNumber - 1) % 5) + 1;
+      const side = rowIndex % 2 === 0 ? "R" : "L";
+      return `${zone}-${level}-${logNumber}-${side}`;
+    }
+  }
+
+  if (["E", "F"].includes(zone)) {
+    const logNumber = Number.parseInt(log.replace(/^[A-Z]+/, ""), 10);
+    if (Number.isFinite(logNumber)) {
+      const colNo = ((rowIndex - 1) % 14) + 1;
+      return `${zone}-${logNumber}-${colNo}`;
+    }
+  }
+
+  if (zone === "P") {
+    if (existing.startsWith("P-")) return existing;
+    const rowNo = Math.max(
+      1,
+      Number.parseInt(log.replace(/[^0-9]/g, ""), 10) || rowIndex
+    );
+    return `P-${rowNo}-1`;
+  }
+
+  if (zone === "Q") {
+    if (existing.startsWith("Q1-") || existing.startsWith("Q2-")) return existing;
+    const blockKey = log.startsWith("Q2") ? "Q2" : "Q1";
+    const rowNo = Math.max(
+      1,
+      Number.parseInt(log.replace(/[^0-9]/g, ""), 10) || rowIndex
+    );
+    return `${blockKey}-${rowNo}-1`;
+  }
+
+  return existing || "";
+}
+
+function normalizeLotRecord(raw, fallbackId) {
+  const zone = deriveZoneFromRawRecord(raw);
+  const slotId = normalizeSlotIdFromRecord({ ...raw, zone });
+
+  return {
+    ...raw,
+    id: Number(raw.id ?? fallbackId),
+    slotId,
+    lot: raw.lot ?? raw.lotNo ?? "",
+    qty: Number(raw.qty ?? raw.stockQty ?? raw.Stock ?? 0),
+    zone: zone || (slotId ? deriveZoneFromSlot(slotId) : ""),
+    locationCode:
+      raw.locationCode ||
+      raw.slotCode ||
+      raw.log ||
+      (slotId ? deriveLocationCodeFromSlot(slotId, zone) : ""),
+    productType: raw.productType || "fg",
+    status: raw.status || "",
+  };
 }
 
 function getPairPalette(unitNo) {
@@ -608,7 +687,9 @@ function suggestDispatchStageTarget(lot, lots) {
 export default function App() {
   const [selectedZone, setSelectedZone] = useState("A");
   const [selectedSlotId, setSelectedSlotId] = useState(null);
-  const [lots, setLots] = useState(initialLots);
+  const [pendingScrollSlotId, setPendingScrollSlotId] = useState(null);
+  const [lots, setLots] = useState([]);
+  const [loadingLots, setLoadingLots] = useState(true);
   const [pendingMoves, setPendingMoves] = useState([]);
   const [draggingLotId, setDraggingLotId] = useState(null);
 
@@ -653,6 +734,35 @@ export default function App() {
     setSelectedSlotId(null);
   }, [selectedZone]);
 
+  useEffect(() => {
+    try {
+      const nextLots = stockSeed
+        .map((raw, index) => normalizeLotRecord(raw, index + 1))
+        .filter((lot) => lot.slotId && lot.qty > 0);
+
+      setLots(nextLots);
+    } catch (error) {
+      console.error("Mock data load error:", error);
+    } finally {
+      setLoadingLots(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!pendingScrollSlotId) return;
+
+    const run = () => {
+      const el = document.querySelector(`[data-slot-id="${pendingScrollSlotId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      }
+      setPendingScrollSlotId(null);
+    };
+
+    const raf = window.requestAnimationFrame(run);
+    return () => window.cancelAnimationFrame(raf);
+  }, [pendingScrollSlotId, selectedZone]);
+
   const stats = useMemo(() => {
     const storageLots = displayLots.filter((l) => !["Q", "P"].includes(l.zone));
     const stagedLots = displayLots.filter(
@@ -663,6 +773,14 @@ export default function App() {
       storageLots: storageLots.length,
       stagedLots: stagedLots.length,
     };
+  }, [displayLots]);
+
+  const zoneLotCounts = useMemo(() => {
+    const counts = {};
+    Object.keys(ZONE_LAYOUTS).forEach((zoneKey) => {
+      counts[zoneKey] = displayLots.filter((lot) => lot.zone === zoneKey && lot.qty > 0).length;
+    });
+    return counts;
   }, [displayLots]);
 
   function safeScrollToSection(sectionId, callback) {
@@ -804,15 +922,12 @@ export default function App() {
   function chooseInboundCandidate(candidate) {
     if (!candidate || !candidate.zone || !candidate.slotId) return;
 
-    setInboundModalOpen(false);
     setSelectedInboundCandidate(candidate);
     setSelectedZone(candidate.zone);
     setSelectedSlotId(candidate.slotId);
+    setPendingScrollSlotId(candidate.slotId);
     setDraggingLotId(null);
-
-    safeScrollToSection("warehouse-layout-section", () => {
-      setInboundModalOpen(true);
-    });
+    setInboundModalOpen(true);
   }
 
   function closeInboundModal() {
@@ -1176,6 +1291,16 @@ export default function App() {
     setSlotActionPlan(null);
   }
 
+  if (loadingLots) {
+    return (
+      <div style={pageStyle}>
+        <div style={appContainerStyle}>
+          <div style={cardStyle}>Loading mock stock data...</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={pageStyle}>
       <div style={appContainerStyle}>
@@ -1241,7 +1366,7 @@ export default function App() {
         <div id="warehouse-layout-section" style={gridSectionStyle}>
           <div style={zoneTitleBarStyle}>
             <div>
-              <h2 style={{ margin: 0 }}>{zoneTitle(selectedZone)}</h2>
+              <h2 style={{ margin: 0 }}>{zoneTitle(selectedZone)} <span style={zoneCountBadgeStyle}>{zoneLotCounts[selectedZone] || 0} lots</span></h2>
               <div style={{ color: "#475569", marginTop: 6, fontSize: 14 }}>
                 Type: <strong>{zoneCfg.type}</strong> · Usage: <strong>{zoneCfg.usage}</strong>
                 {zoneCfg.note ? ` · ${zoneCfg.note}` : ""}
@@ -1250,6 +1375,7 @@ export default function App() {
 
             <div style={actionBarStyle}>
               <div style={miniBadge}>Pending moves: {pendingMoves.length}</div>
+
 
               <button onClick={exportToExcel} style={secondaryBtnStyle}>
                 Export Excel
@@ -1540,7 +1666,7 @@ function InboundSection({
             </div>
 
             <div style={{ marginTop: 14, color: "#475569", fontSize: 14 }}>
-              ระบบพาไปยังตำแหน่งจริงแล้ว คุณสามารถดู layout ก่อนกดยืนยันจัดเก็บได้
+              ระบบเลือก pallet นี้ไว้แล้ว คุณกดดูโซนที่แนะนำได้จากแผนที่หรือยืนยันจัดเก็บได้ทันที
             </div>
 
             <div style={modalActionRowStyle}>
@@ -2241,6 +2367,7 @@ function DispatchZoneInline({
                   return (
                     <button
                       key={slotId}
+                      data-slot-id={slotId}
                       onClick={() => setSelectedSlotId(slotId)}
                       title={getSlotLabel(slotId, deriveZoneFromSlot(slotId))}
                       style={{
@@ -2287,6 +2414,7 @@ function SlotTile({
   return (
     <button
       type="button"
+      data-slot-id={slotId}
       onClick={onSelect}
       draggable={!!lot}
       onDragStart={() => {
@@ -2334,6 +2462,18 @@ function SlotTile({
  * STYLES
  * =========================================================
  */
+const zoneCountBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  marginLeft: 10,
+  padding: "4px 8px",
+  borderRadius: 999,
+  background: "#dbeafe",
+  color: "#1d4ed8",
+  fontSize: 12,
+  fontWeight: 700,
+};
+
 const pageStyle = {
   minHeight: "100vh",
   background: "linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%)",
@@ -2606,6 +2746,30 @@ const modalInfoGridStyle = {
   display: "grid",
   gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
   gap: 10,
+};
+
+const modalInfoItemStyle = {
+  padding: 12,
+  borderRadius: 12,
+  background: "#f8fafc",
+  border: "1px solid #e2e8f0",
+  minHeight: 72,
+};
+
+const modalInfoLabelStyle = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: "#64748b",
+  marginBottom: 6,
+  textTransform: "uppercase",
+  letterSpacing: "0.03em",
+};
+
+const modalInfoValueStyle = {
+  fontSize: 14,
+  fontWeight: 700,
+  color: "#0f172a",
+  wordBreak: "break-word",
 };
 
 const statusPillStyle = {
