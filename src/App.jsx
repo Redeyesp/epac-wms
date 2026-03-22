@@ -618,6 +618,7 @@ export default function App() {
   });
   const [inboundResult, setInboundResult] = useState(null);
   const [selectedInboundCandidate, setSelectedInboundCandidate] = useState(null);
+  const [inboundConfirmOpen, setInboundConfirmOpen] = useState(false);
 
   const [dispatchForm, setDispatchForm] = useState({
     sku: "",
@@ -626,6 +627,7 @@ export default function App() {
   });
   const [dispatchResults, setDispatchResults] = useState([]);
   const [selectedDispatchLot, setSelectedDispatchLot] = useState(null);
+  const [dispatchModalOpen, setDispatchModalOpen] = useState(false);
   const [dispatchPlan, setDispatchPlan] = useState(null);
   const [slotActionPlan, setSlotActionPlan] = useState(null);
 
@@ -752,6 +754,7 @@ export default function App() {
     );
 
     setSelectedInboundCandidate(null);
+    setInboundConfirmOpen(false);
 
     setInboundResult({
       sku: inboundForm.sku,
@@ -768,14 +771,19 @@ export default function App() {
 
   function chooseInboundCandidate(candidate) {
     setSelectedInboundCandidate(candidate);
+    setInboundConfirmOpen(false);
     setSelectedZone(candidate.zone);
     setSelectedSlotId(candidate.slotId);
     setDraggingLotId(null);
 
     requestAnimationFrame(() => {
-      const el = document.getElementById("warehouse-layout-section");
+      const el = document.getElementById("warehouse-map-section");
       if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+
+    window.setTimeout(() => {
+      setInboundConfirmOpen(true);
+    }, 280);
   }
 
   function confirmInboundToSelectedPallet() {
@@ -808,6 +816,7 @@ export default function App() {
 
     setInboundResult(null);
     setSelectedInboundCandidate(null);
+    setInboundConfirmOpen(false);
   }
 
   function updateDispatchField(field, value) {
@@ -823,20 +832,35 @@ export default function App() {
     );
     setDispatchResults(results);
     setSelectedDispatchLot(null);
+    setDispatchModalOpen(false);
     setDispatchPlan(null);
   }
 
   function selectDispatchLot(lot) {
     setSelectedDispatchLot(lot);
     setDispatchPlan(null);
-
+    setDispatchModalOpen(false);
+    setDraggingLotId(null);
+    setSlotActionPlan(null);
     setSelectedZone(lot.zone);
     setSelectedSlotId(lot.slotId);
 
     requestAnimationFrame(() => {
-      const el = document.getElementById("warehouse-layout-section");
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      const el = document.getElementById("warehouse-map-section");
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     });
+
+    window.setTimeout(() => {
+      setDispatchModalOpen(true);
+    }, 280);
+  }
+
+  function closeDispatchModal() {
+    setDispatchModalOpen(false);
+    setDispatchPlan(null);
+    setSelectedDispatchLot(null);
   }
 
   function prepareDispatchAction(actionValue) {
@@ -846,11 +870,6 @@ export default function App() {
 
     setSelectedZone(lot.zone);
     setSelectedSlotId(lot.slotId);
-
-    requestAnimationFrame(() => {
-      const el = document.getElementById("warehouse-layout-section");
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
 
     if (actionValue === "dispatch_out") {
       setDispatchPlan({
@@ -888,11 +907,6 @@ export default function App() {
     }));
     setSelectedZone(candidate.zone);
     setSelectedSlotId(candidate.slotId);
-
-    requestAnimationFrame(() => {
-      const el = document.getElementById("warehouse-layout-section");
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
   }
 
   function confirmDispatchAction() {
@@ -901,6 +915,8 @@ export default function App() {
     if (dispatchPlan.action === "dispatch_out") {
       deleteLot(dispatchPlan.lotId);
       setDispatchPlan(null);
+      setSelectedDispatchLot(null);
+      setDispatchModalOpen(false);
       setSelectedSlotId(null);
       return;
     }
@@ -1085,6 +1101,8 @@ export default function App() {
             saveInbound={saveInbound}
             inboundResult={inboundResult}
             selectedInboundCandidate={selectedInboundCandidate}
+            inboundConfirmOpen={inboundConfirmOpen}
+            setInboundConfirmOpen={setInboundConfirmOpen}
             chooseInboundCandidate={chooseInboundCandidate}
             confirmInboundToSelectedPallet={confirmInboundToSelectedPallet}
           />
@@ -1095,7 +1113,9 @@ export default function App() {
             runDispatchSearch={runDispatchSearch}
             dispatchResults={dispatchResults}
             selectedDispatchLot={selectedDispatchLot}
+            dispatchModalOpen={dispatchModalOpen}
             selectDispatchLot={selectDispatchLot}
+            closeDispatchModal={closeDispatchModal}
             prepareDispatchAction={prepareDispatchAction}
             dispatchPlan={dispatchPlan}
             pickDispatchCandidate={pickDispatchCandidate}
@@ -1103,7 +1123,7 @@ export default function App() {
           />
         </div>
 
-        <div style={topSectionStyle}>
+        <div id="warehouse-map-section" style={topSectionStyle}>
           <div style={mapSectionStyle}>
             <WarehouseMapPanel
               selectedZone={selectedZone}
@@ -1259,6 +1279,8 @@ function InboundSection({
   saveInbound,
   inboundResult,
   selectedInboundCandidate,
+  inboundConfirmOpen,
+  setInboundConfirmOpen,
   chooseInboundCandidate,
   confirmInboundToSelectedPallet,
 }) {
@@ -1385,18 +1407,41 @@ function InboundSection({
             </div>
           </div>
 
-          {selectedInboundCandidate && (
-            <div style={confirmBoxStyle}>
-              <div style={{ fontWeight: 800 }}>
-                ยืนยันที่ pallet นี้ไหม: {selectedInboundCandidate.label}
-              </div>
-              <div style={{ color: "#475569", marginTop: 6 }}>
-                ระบบได้เด้งไปยังตำแหน่งจริงด้านล่างแล้ว
-              </div>
-              <div style={{ marginTop: 12 }}>
-                <button onClick={confirmInboundToSelectedPallet} style={primaryBtnStyle}>
-                  ยืนยันจัดเก็บที่พาเลตนี้
-                </button>
+          {inboundConfirmOpen && selectedInboundCandidate && (
+            <div style={modalOverlayStyle} onClick={() => setInboundConfirmOpen(false)}>
+              <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
+                <div style={modalHeaderStyle}>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800 }}>Confirm Inbound Pallet</div>
+                    <div style={{ color: "#64748b", marginTop: 6, fontSize: 13 }}>
+                      ระบบพามาที่ pallet ปลายทางแล้ว ค่อยกดยืนยันจัดเก็บตรงนี้ได้เลย
+                    </div>
+                  </div>
+                  <button onClick={() => setInboundConfirmOpen(false)} style={modalCloseBtnStyle}>
+                    ×
+                  </button>
+                </div>
+
+                <div style={confirmBoxStyle}>
+                  <div style={modalInfoGridStyle}>
+                    <div style={suggestMetaItemStyle}>รหัสสินค้า: <strong>{inboundResult.sku}</strong></div>
+                    <div style={suggestMetaItemStyle}>ล็อตสินค้า: <strong>{inboundResult.lotNo}</strong></div>
+                    <div style={suggestMetaItemStyle}>จำนวน: <strong>{inboundResult.stockQty}</strong></div>
+                  </div>
+
+                  <div style={{ color: "#475569", marginTop: 10 }}>
+                    จัดเก็บที่: <strong>{selectedInboundCandidate.label}</strong> · Zone <strong>{selectedInboundCandidate.zone}</strong>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14 }}>
+                  <button onClick={() => setInboundConfirmOpen(false)} style={ghostBtnStyle}>
+                    ยกเลิก
+                  </button>
+                  <button onClick={confirmInboundToSelectedPallet} style={primaryBtnStyle}>
+                    ยืนยันจัดเก็บที่พาเลตนี้
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -1417,7 +1462,9 @@ function DispatchSection({
   runDispatchSearch,
   dispatchResults,
   selectedDispatchLot,
+  dispatchModalOpen,
   selectDispatchLot,
+  closeDispatchModal,
   prepareDispatchAction,
   dispatchPlan,
   pickDispatchCandidate,
@@ -1429,7 +1476,7 @@ function DispatchSection({
         <div>
           <h2 style={{ margin: 0 }}>Dispatch</h2>
           <div style={{ color: "#475569", marginTop: 6, fontSize: 14 }}>
-            ค้นหาจากรหัสสินค้าและล็อตสินค้า แล้วเลือก FG / Semi-FG เพื่อ suggest pallet ก่อน
+            ค้นหาจากรหัสสินค้าและล็อตสินค้า แล้วเลือก FG / Semi-FG เพื่อเปิดเมนูทำรายการได้ทันที
           </div>
         </div>
       </div>
@@ -1519,79 +1566,97 @@ function DispatchSection({
         </div>
       )}
 
-      {selectedDispatchLot && (
-        <div style={confirmBoxStyle}>
-          <div style={{ fontSize: 18, fontWeight: 800 }}>Dispatch Action</div>
-          <div style={{ color: "#475569", marginTop: 8 }}>
-            รหัสสินค้า: <strong>{selectedDispatchLot.sku}</strong> · ล็อตสินค้า: <strong>{selectedDispatchLot.lot}</strong>
-          </div>
-          <div style={{ color: "#475569", marginTop: 6 }}>
-            จะทำรายการจาก pallet: <strong>{getSlotLabel(selectedDispatchLot.slotId, selectedDispatchLot.zone)}</strong>
-          </div>
-
-          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={() => prepareDispatchAction("dispatch_out")} style={secondaryBtnStyle}>
-              Dispatch Out
-            </button>
-            <button onClick={() => prepareDispatchAction("move_to_stage")} style={secondaryBtnStyle}>
-              Move to P / Q1 / Q2
-            </button>
-          </div>
-
-          {dispatchPlan?.action === "dispatch_out" && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ color: "#475569" }}>
-                ยืนยันการ Dispatch Out จาก <strong>{dispatchPlan.currentLabel}</strong>
+      {dispatchModalOpen && selectedDispatchLot && (
+        <div style={modalOverlayStyle} onClick={closeDispatchModal}>
+          <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
+            <div style={modalHeaderStyle}>
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 800 }}>Dispatch Action</div>
+                <div style={{ color: "#64748b", marginTop: 6, fontSize: 13 }}>
+                  เลือกรายการจาก lot นี้ได้เลยโดยไม่ต้องเลื่อนกลับไปด้านบน
+                </div>
               </div>
-              <button onClick={confirmDispatchAction} style={{ ...primaryBtnStyle, marginTop: 10 }}>
-                Confirm Dispatch Out
+              <button onClick={closeDispatchModal} style={modalCloseBtnStyle}>
+                ×
               </button>
             </div>
-          )}
 
-          {dispatchPlan?.action === "move_to_stage" && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ color: "#475569", marginBottom: 10 }}>
-                เลือกตำแหน่ง staging ปลายทาง
+            <div style={confirmBoxStyle}>
+              <div style={modalInfoGridStyle}>
+                <div style={suggestMetaItemStyle}>รหัสสินค้า: <strong>{selectedDispatchLot.sku}</strong></div>
+                <div style={suggestMetaItemStyle}>ล็อตสินค้า: <strong>{selectedDispatchLot.lot}</strong></div>
+                <div style={suggestMetaItemStyle}>จำนวน: <strong>{selectedDispatchLot.qty}</strong></div>
               </div>
 
-              <div style={{ display: "grid", gap: 8 }}>
-                {dispatchPlan.candidates?.length ? (
-                  dispatchPlan.candidates.map((candidate) => (
-                    <button
-                      key={candidate.slotId}
-                      onClick={() => pickDispatchCandidate(candidate)}
-                      style={{
-                        ...candidateBtnStyle,
-                        justifyContent: "space-between",
-                        border:
-                          dispatchPlan.selectedCandidate?.slotId === candidate.slotId
-                            ? "2px solid #2563eb"
-                            : "1px solid #cbd5e1",
-                        background:
-                          dispatchPlan.selectedCandidate?.slotId === candidate.slotId
-                            ? "#eff6ff"
-                            : "#fff",
-                      }}
-                    >
-                      <div style={{ fontWeight: 700 }}>{candidate.label}</div>
-                      <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-                        {candidate.reason}
-                      </div>
-                    </button>
-                  ))
-                ) : (
-                  <div style={{ color: "#64748b" }}>ไม่พบช่อง staging ว่าง</div>
+              <div style={{ color: "#475569", marginTop: 10 }}>
+                ตำแหน่งปัจจุบัน: <strong>{getSlotLabel(selectedDispatchLot.slotId, selectedDispatchLot.zone)}</strong> · Zone <strong>{selectedDispatchLot.zone}</strong>
+              </div>
+            </div>
+
+            <div style={modalActionRowStyle}>
+              <button onClick={() => prepareDispatchAction("dispatch_out")} style={secondaryBtnStyle}>
+                Dispatch Out
+              </button>
+              <button onClick={() => prepareDispatchAction("move_to_stage")} style={secondaryBtnStyle}>
+                Move to P / Q1 / Q2
+              </button>
+            </div>
+
+            {dispatchPlan?.action === "dispatch_out" && (
+              <div style={confirmBoxStyle}>
+                <div style={{ color: "#475569" }}>
+                  ยืนยันการ Dispatch Out จาก <strong>{dispatchPlan.currentLabel}</strong>
+                </div>
+                <button onClick={confirmDispatchAction} style={{ ...primaryBtnStyle, marginTop: 10 }}>
+                  Confirm Dispatch Out
+                </button>
+              </div>
+            )}
+
+            {dispatchPlan?.action === "move_to_stage" && (
+              <div style={confirmBoxStyle}>
+                <div style={{ color: "#475569", marginBottom: 10 }}>
+                  เลือกตำแหน่ง staging ปลายทาง
+                </div>
+
+                <div style={{ display: "grid", gap: 8 }}>
+                  {dispatchPlan.candidates?.length ? (
+                    dispatchPlan.candidates.map((candidate) => (
+                      <button
+                        key={candidate.slotId}
+                        onClick={() => pickDispatchCandidate(candidate)}
+                        style={{
+                          ...candidateBtnStyle,
+                          justifyContent: "space-between",
+                          border:
+                            dispatchPlan.selectedCandidate?.slotId === candidate.slotId
+                              ? "2px solid #2563eb"
+                              : "1px solid #cbd5e1",
+                          background:
+                            dispatchPlan.selectedCandidate?.slotId === candidate.slotId
+                              ? "#eff6ff"
+                              : "#fff",
+                        }}
+                      >
+                        <div style={{ fontWeight: 700 }}>{candidate.label}</div>
+                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                          {candidate.reason}
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div style={{ color: "#64748b" }}>ไม่พบช่อง staging ว่าง</div>
+                  )}
+                </div>
+
+                {dispatchPlan.selectedCandidate && (
+                  <button onClick={confirmDispatchAction} style={{ ...primaryBtnStyle, marginTop: 12 }}>
+                    Confirm Move to {dispatchPlan.selectedCandidate.label}
+                  </button>
                 )}
               </div>
-
-              {dispatchPlan.selectedCandidate && (
-                <button onClick={confirmDispatchAction} style={{ ...primaryBtnStyle, marginTop: 12 }}>
-                  Confirm Move to {dispatchPlan.selectedCandidate.label}
-                </button>
-              )}
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -2298,6 +2363,59 @@ const confirmBoxStyle = {
 const dispatchLotCardStyle = {
   padding: 12,
   borderRadius: 14,
+};
+
+const modalOverlayStyle = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(15, 23, 42, 0.45)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 20,
+  zIndex: 50,
+};
+
+const modalCardStyle = {
+  width: "min(720px, 100%)",
+  maxHeight: "90vh",
+  overflowY: "auto",
+  borderRadius: 20,
+  background: "#fff",
+  border: "1px solid #e2e8f0",
+  boxShadow: "0 24px 48px rgba(15, 23, 42, 0.18)",
+  padding: 18,
+};
+
+const modalHeaderStyle = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 12,
+};
+
+const modalCloseBtnStyle = {
+  border: "1px solid #cbd5e1",
+  background: "#fff",
+  borderRadius: 999,
+  width: 36,
+  height: 36,
+  fontSize: 24,
+  lineHeight: 1,
+  cursor: "pointer",
+};
+
+const modalActionRowStyle = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  marginTop: 14,
+};
+
+const modalInfoGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  gap: 10,
 };
 
 const statusPillStyle = {
