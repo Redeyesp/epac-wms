@@ -2114,7 +2114,7 @@ function MultiLevelFlatLRZoneInline({
 }) {
   return (
     <div style={{ display: "grid", gap: 10 }}>
-      {Array.from({ length: cfg.levels }, (_, idx) => idx + 1).map((level) => {
+      {Array.from({ length: cfg.levels }, (_, idx) => cfg.levels - idx).map((level) => {
         const unitNos = buildLevelSequence(level, cfg.units, cfg.levels);
         return (
           <div key={level}>
