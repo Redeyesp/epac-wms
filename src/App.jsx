@@ -31,8 +31,15 @@ const ZONE_LAYOUTS = {
   L: { type: "multi_level_flat_lr", units: 100, levels: 5, usage: "storage" },
   M: { type: "multi_level_flat_lr", units: 100, levels: 5, usage: "storage" },
 
-  E: { type: "row_14", rows: 64, cols: 14, usage: "storage", note: "FG / Repack FG" },
-  F: { type: "row_14", rows: 56, cols: 14, usage: "storage", note: "FG / Repack FG" },
+  E: { type: "row_14", rows: 64, cols: 14, usage: "storage", note: "Semi-Finished Goods" },
+  F: { type: "row_14", rows: 56, cols: 14, usage: "storage", note: "Semi-Finished Goods" },
+
+  P: {
+    type: "row_14_dispatch",
+    usage: "storage",
+    note: "Semi-Finished Goods",
+    blocks: [{ key: "P", label: "P", rows: 14, cols: 6 }],
+  },
 
   Q: {
     type: "row_14_dispatch",
@@ -44,17 +51,10 @@ const ZONE_LAYOUTS = {
       { key: "Q2", label: "Q2", rows: 10, cols: 6 },
     ],
   },
-  P: {
-    type: "row_14_dispatch",
-    usage: "dispatch_only",
-    note: "Dispatch staging",
-    lockedDrop: true,
-    blocks: [{ key: "P", label: "P", rows: 14, cols: 6 }],
-  },
 };
 
-const FG_FRIENDLY_ZONES = ["E", "F"];
-const SEMI_FG_AVOID_ZONES = ["E", "F"];
+const STORAGE_ZONES = ["A", "B", "C", "E", "F", "G", "H", "I", "J", "K", "L", "M", "P"];
+const DISPATCH_ONLY_ZONES = ["Q"];
 const DISPATCH_STATUSES = [
   "Waiting to be Dispatch",
   "Loading",
@@ -77,8 +77,8 @@ const WAREHOUSE_ZONES = [
   { id: "E", zoneKey: "E", label: "E", x: 390, y: 185, w: 120, h: 120, color: "#d946ef" },
   { id: "F", zoneKey: "F", label: "F", x: 510, y: 185, w: 130, h: 92, color: "#22d3ee" },
 
+  { id: "P", zoneKey: "P", label: "P", x: 720, y: 155, w: 120, h: 210, color: "#d8b4fe" },
   { id: "Q1", zoneKey: "Q", label: "Q", x: 720, y: 40, w: 120, h: 110, color: "#86efac" },
-  { id: "P", zoneKey: "P", label: "P", x: 720, y: 150, w: 120, h: 210, color: "#d8b4fe" },
   { id: "Q2", zoneKey: "Q", label: "Q", x: 510, y: 277, w: 130, h: 100, color: "#4ade80" },
 ];
 
@@ -110,6 +110,14 @@ function buildLevelSequence(level, maxUnits, totalLevels = 5) {
   return result;
 }
 
+function parseNumberLike(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const cleaned = String(value ?? "").replace(/,/g, "").trim();
+  if (!cleaned) return 0;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function zoneTitle(zoneKey) {
   const cfg = ZONE_LAYOUTS[zoneKey];
   if (!cfg) return zoneKey;
@@ -137,10 +145,7 @@ function applyPendingMovesToLots(lots, pendingMoves) {
       slotId: movedSlot,
       zone: nextZone,
       locationCode: deriveLocationCodeFromSlot(movedSlot, nextZone),
-      status:
-        nextZone === "P" || nextZone === "Q"
-          ? lot.status || "Waiting to be Dispatch"
-          : lot.status,
+      status: nextZone === "Q" ? lot.status || "Waiting to be Dispatch" : lot.status,
     };
   });
 }
@@ -148,7 +153,6 @@ function applyPendingMovesToLots(lots, pendingMoves) {
 function deriveZoneFromSlot(slotId) {
   const prefix = String(slotId).split("-")[0];
   if (prefix === "Q1" || prefix === "Q2") return "Q";
-  if (prefix === "P") return "P";
   return prefix;
 }
 
@@ -233,7 +237,8 @@ function normalizeSlotIdFromRecord(raw) {
       1,
       Number.parseInt(log.replace(/[^0-9]/g, ""), 10) || rowIndex
     );
-    return `P-${rowNo}-1`;
+    const colNo = Math.max(1, ((rowIndex - 1) % 6) + 1);
+    return `P-${rowNo}-${colNo}`;
   }
 
   if (zone === "Q") {
@@ -252,33 +257,35 @@ function normalizeSlotIdFromRecord(raw) {
 function normalizeLotRecord(raw, fallbackId) {
   const zone = deriveZoneFromRawRecord(raw);
   const slotId = normalizeSlotIdFromRecord({ ...raw, zone });
+  const lotDates = resolveLotDates(raw);
 
   return {
     ...raw,
+    ...lotDates,
     id: Number(raw.id ?? fallbackId),
     slotId,
     lot: raw.lot ?? raw.lotNo ?? "",
-    qty: Number(raw.qty ?? raw.stockQty ?? raw.Stock ?? 0),
+    qty: parseNumberLike(raw.qty ?? raw.stockQty ?? raw.Stock ?? 0),
     zone: zone || (slotId ? deriveZoneFromSlot(slotId) : ""),
     locationCode:
       raw.locationCode ||
       raw.slotCode ||
       raw.log ||
       (slotId ? deriveLocationCodeFromSlot(slotId, zone) : ""),
-    productType: raw.productType || "fg",
+    productType: raw.productType || "semi-fg",
     status: raw.status || "",
   };
 }
 
-function getPairPalette(unitNo) {
-  const palettes = [
+function getPairLocation(unitNo) {
+  const locations = [
     { left: "#eaf2ff", right: "#d7e8ff" },
     { left: "#eef7f0", right: "#dff0e3" },
     { left: "#f4efff", right: "#e8ddff" },
     { left: "#fff3e8", right: "#ffe5cf" },
     { left: "#eef6ff", right: "#dcecff" },
   ];
-  return palettes[(unitNo - 1) % palettes.length];
+  return locations[(unitNo - 1) % locations.length];
 }
 
 function getPendingMoveForLot(pendingMoves, lotId) {
@@ -342,17 +349,52 @@ function parseMfgFromLot(lotNo) {
   return date;
 }
 
-function calcAgingDays(mfgDate, receivedDate) {
-  if (!mfgDate || !receivedDate) return "";
-  const mfg = new Date(mfgDate);
-  const recv = new Date(receivedDate);
+function calcAgingDays(startDate, endDate) {
+  if (!startDate || !endDate) return "";
+  const start = new Date(startDate);
+  const end = new Date(endDate);
 
-  if (Number.isNaN(mfg.getTime()) || Number.isNaN(recv.getTime())) return "";
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "";
 
-  mfg.setHours(0, 0, 0, 0);
-  recv.setHours(0, 0, 0, 0);
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
 
-  return Math.floor((recv - mfg) / 86400000);
+  return Math.max(0, Math.floor((end - start) / 86400000));
+}
+
+function calcCurrentAgingDays(mfgDate, receivedDate, referenceDate = getTodayIsoDate()) {
+  const baseDate = mfgDate || receivedDate;
+  if (!baseDate || !referenceDate) return "";
+  return calcAgingDays(baseDate, referenceDate);
+}
+
+function toIsoDate(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function getTodayIsoDate() {
+  return toIsoDate(new Date());
+}
+
+function resolveLotDates(raw) {
+  const receivedDate =
+    raw.receivedDate || raw.received_date || raw.recvDate || raw.receiptDate || "";
+
+  const explicitMfg = raw.mfgDate || raw.mfg_date || raw.manufacturingDate || "";
+  const parsedMfg = explicitMfg ? new Date(explicitMfg) : parseMfgFromLot(raw.lot ?? raw.lotNo ?? "");
+  const safeMfg = parsedMfg && !Number.isNaN(parsedMfg.getTime()) ? toIsoDate(parsedMfg) : "";
+  const safeReceived = toIsoDate(receivedDate) || getTodayIsoDate();
+
+  const agingDays = calcCurrentAgingDays(safeMfg, safeReceived);
+
+  return {
+    receivedDate: safeReceived,
+    mfgDate: safeMfg,
+    agingDays,
+  };
 }
 
 function makeAgingBuckets(days, qty) {
@@ -410,7 +452,7 @@ function getSlotLabel(slotId, zoneKey) {
     return `${z}${rowNo}(${colNo})`;
   }
 
-  if (slotId.startsWith("Q1") || slotId.startsWith("Q2") || slotId.startsWith("P")) {
+  if (slotId.startsWith("Q1") || slotId.startsWith("Q2")) {
     const [block, rowNo, colNo] = slotId.split("-");
     return `${block}${rowNo}(${colNo})`;
   }
@@ -453,20 +495,10 @@ function getAllEmptySlotsInZone(zoneKey, lots) {
 
 function getAllEmptyDispatchSlots(lots) {
   const occupied = new Set(
-    lots
-      .filter((l) => (l.zone === "P" || l.zone === "Q") && l.qty > 0)
-      .map((l) => l.slotId)
+    lots.filter((l) => l.zone === "Q" && l.qty > 0).map((l) => l.slotId)
   );
 
   const slots = [];
-
-  const pCfg = ZONE_LAYOUTS.P.blocks[0];
-  for (let rowNo = 1; rowNo <= pCfg.rows; rowNo += 1) {
-    for (let colNo = 1; colNo <= pCfg.cols; colNo += 1) {
-      const slotId = `P-${rowNo}-${colNo}`;
-      if (!occupied.has(slotId)) slots.push(slotId);
-    }
-  }
 
   for (const block of ZONE_LAYOUTS.Q.blocks) {
     for (let rowNo = 1; rowNo <= block.rows; rowNo += 1) {
@@ -513,14 +545,11 @@ function findBestEmptySlotsNearSameSku(zoneKey, sku, lots, limit = 3) {
   return candidates.slice(0, limit);
 }
 
-function findTopSuggestedPallets(inboundItem, lots) {
-  const storageZones = Object.entries(ZONE_LAYOUTS)
-    .filter(([, cfg]) => cfg.usage === "storage")
-    .map(([zoneKey]) => zoneKey);
+function findTopSuggestedLocations(inboundItem, lots) {
+  const storageZones = STORAGE_ZONES;
 
   const sku = String(inboundItem.sku || "").trim().toUpperCase();
   const skuFamily = getSkuFamily(sku);
-  const productType = inboundItem.productType || "fg";
 
   const zoneStats = storageZones.map((zoneKey) => {
     const zoneLots = lots.filter((l) => l.zone === zoneKey && l.qty > 0);
@@ -532,20 +561,12 @@ function findTopSuggestedPallets(inboundItem, lots) {
     ).length;
     const freeSlots = getZoneFreeSlots(zoneKey, lots);
 
-    let score =
+    const score =
       sameSkuCount > 0
         ? 1000 + sameSkuCount * 10 + freeSlots
         : familyCount > 0
           ? 500 + familyCount * 10 + freeSlots
           : freeSlots;
-
-    if (productType === "semi-fg" && SEMI_FG_AVOID_ZONES.includes(zoneKey)) {
-      score -= 500;
-    }
-
-    if (productType === "fg" && FG_FRIENDLY_ZONES.includes(zoneKey)) {
-      score += 60;
-    }
 
     return {
       zoneKey,
@@ -574,14 +595,6 @@ function findTopSuggestedPallets(inboundItem, lots) {
         reason = `ใกล้กลุ่มรหัสสินค้าเดียวกันมากที่สุดใน Zone ${zone.zoneKey}`;
       }
 
-      if (productType === "semi-fg" && SEMI_FG_AVOID_ZONES.includes(zone.zoneKey)) {
-        reason += " และเป็น fallback หลังจากหลีกเลี่ยง E/F สำหรับ Semi-FG";
-      }
-
-      if (productType === "fg" && FG_FRIENDLY_ZONES.includes(zone.zoneKey)) {
-        reason += " และเหมาะกับ FG";
-      }
-
       slotCandidates.push({
         zone: zone.zoneKey,
         slotId,
@@ -597,40 +610,190 @@ function findTopSuggestedPallets(inboundItem, lots) {
   return slotCandidates.slice(0, 3);
 }
 
-function searchDispatchLots(lots, skuQuery, lotQuery, productType, requestedQty) {
+
+function findSuggestedOtherLocationsForLot(lot, lots) {
+  if (!lot) return [];
+
+  return findTopSuggestedLocations(
+    {
+      sku: lot.sku,
+      productType: lot.productType || "semi-fg",
+      stockQty: lot.qty,
+    },
+    lots.filter(
+      (x) =>
+        x.id !== lot.id &&
+        !DISPATCH_ONLY_ZONES.includes(x.zone)
+    )
+  ).filter((candidate) => candidate.slotId !== lot.slotId);
+}
+
+function doesSlotExist(slotId) {
+  const zone = deriveZoneFromSlot(slotId);
+  const cfg = ZONE_LAYOUTS[zone];
+  if (!cfg) return false;
+
+  if (cfg.type === "multi_level_flat_lr") {
+    const [z, level, unitNo, side] = String(slotId).split("-");
+    return (
+      z === zone &&
+      Number(level) >= 1 &&
+      Number(level) <= cfg.levels &&
+      Number(unitNo) >= 1 &&
+      Number(unitNo) <= cfg.units &&
+      ["L", "R"].includes(String(side || "").toUpperCase())
+    );
+  }
+
+  if (cfg.type === "row_14") {
+    const [z, rowNo, colNo] = String(slotId).split("-");
+    return (
+      z === zone &&
+      Number(rowNo) >= 1 &&
+      Number(rowNo) <= cfg.rows &&
+      Number(colNo) >= 1 &&
+      Number(colNo) <= cfg.cols
+    );
+  }
+
+  if (cfg.type === "row_14_dispatch") {
+    const [block, rowNo, colNo] = String(slotId).split("-");
+    const blockCfg = cfg.blocks.find((b) => b.key === block);
+    return !!(
+      blockCfg &&
+      Number(rowNo) >= 1 &&
+      Number(rowNo) <= blockCfg.rows &&
+      Number(colNo) >= 1 &&
+      Number(colNo) <= blockCfg.cols
+    );
+  }
+
+  return false;
+}
+
+function normalizeLocationInputToSlotId(inputValue) {
+  const raw = String(inputValue || "").trim().toUpperCase().replace(/\s+/g, "");
+  if (!raw) return "";
+
+  if (/^Q[12]-\d+-\d+$/.test(raw) || /^[A-Z]-\d+-\d+(?:-[LR])?$/.test(raw)) {
+    return raw;
+  }
+
+  const dispatchLabelMatch = raw.match(/^(Q[12])(\d+)\((\d+)\)$/);
+  if (dispatchLabelMatch) {
+    const [, block, rowNo, colNo] = dispatchLabelMatch;
+    return `${block}-${rowNo}-${colNo}`;
+  }
+
+  const rowLabelMatch = raw.match(/^([EF])(\d+)\((\d+)\)$/);
+  if (rowLabelMatch) {
+    const [, zone, rowNo, colNo] = rowLabelMatch;
+    return `${zone}-${rowNo}-${colNo}`;
+  }
+
+  const flatMatch = raw.match(/^([ABCGHIJKLM])(\d+)([LR])$/);
+  if (flatMatch) {
+    const [, zone, unitNoText, side] = flatMatch;
+    const unitNo = Number(unitNoText);
+    const level = ((unitNo - 1) % 5) + 1;
+    return `${zone}-${level}-${unitNo}-${side}`;
+  }
+
+  return "";
+}
+
+function buildManualMoveCandidate(lot, rawInput, lots, action) {
+  const slotId = normalizeLocationInputToSlotId(rawInput);
+  if (!slotId) {
+    return { error: "รูปแบบ location ไม่ถูกต้อง" };
+  }
+
+  if (!doesSlotExist(slotId)) {
+    return { error: "ไม่พบ location นี้ในระบบ" };
+  }
+
+  const zone = deriveZoneFromSlot(slotId);
+  if (action === "move_to_q" && zone !== "Q") {
+    return { error: "Move to Q ต้องเลือก location ในโซน Q เท่านั้น" };
+  }
+
+  if (action === "move_to_other_location" && !STORAGE_ZONES.includes(zone)) {
+    return { error: "Move to Other Location ต้องเลือก location ในโซนจัดเก็บเท่านั้น" };
+  }
+
+  if (slotId === lot.slotId) {
+    return { error: "เลือก location เดิมอยู่แล้ว" };
+  }
+
+  const occupiedByOther = lots.some(
+    (x) => x.id !== lot.id && x.slotId === slotId && parseNumberLike(x.qty) > 0
+  );
+  if (occupiedByOther) {
+    return { error: "location นี้มีสินค้าอยู่แล้ว" };
+  }
+
+  return {
+    slotId,
+    zone,
+    label: getSlotLabel(slotId, zone),
+    reason: "เลือกเอง",
+  };
+}
+
+function searchDispatchLots(lots, skuQuery, lotQuery, requestedQty) {
   const skuQ = String(skuQuery || "").trim().toUpperCase();
   const lotQ = String(lotQuery || "").trim().toUpperCase();
-  const requested = Number(requestedQty);
-  const hasRequestedQty = !Number.isNaN(requested) && requested > 0;
+  const requested = parseNumberLike(requestedQty);
+  const hasRequestedQty = requested > 0;
 
   const filtered = lots.filter((l) => {
-    if (l.qty <= 0) return false;
+    const qty = parseNumberLike(l.qty);
+    if (qty <= 0) return false;
     if (l.status === "Complete") return false;
+    if (l.zone === "Q") return false;
     if (skuQ && !String(l.sku).toUpperCase().includes(skuQ)) return false;
     if (lotQ && !String(l.lot).toUpperCase().includes(lotQ)) return false;
-    if (productType && (l.productType || "fg") !== productType) return false;
-    if (hasRequestedQty && Number(l.qty) < requested) return false;
+    if (hasRequestedQty && qty < requested) return false;
     return true;
   });
 
   return filtered.sort((a, b) => {
-    const zoneA = a.zone;
-    const zoneB = b.zone;
+    const ageDiff = parseNumberLike(b.agingDays) - parseNumberLike(a.agingDays);
+    if (ageDiff !== 0) return ageDiff;
 
-    if (productType === "fg") {
-      const aEF = FG_FRIENDLY_ZONES.includes(zoneA) ? 1 : 0;
-      const bEF = FG_FRIENDLY_ZONES.includes(zoneB) ? 1 : 0;
-      if (bEF !== aEF) return bEF - aEF;
-    }
-
-    if (productType === "semi-fg") {
-      const aAvoid = SEMI_FG_AVOID_ZONES.includes(zoneA) ? 1 : 0;
-      const bAvoid = SEMI_FG_AVOID_ZONES.includes(zoneB) ? 1 : 0;
-      if (aAvoid !== bAvoid) return aAvoid - bAvoid;
-    }
+    const recvA = a.receivedDate || "9999-12-31";
+    const recvB = b.receivedDate || "9999-12-31";
+    const recvDiff = recvA.localeCompare(recvB);
+    if (recvDiff !== 0) return recvDiff;
 
     return String(a.sku).localeCompare(String(b.sku));
   });
+}
+
+
+function searchSkuViewLots(lots, skuQuery, lotQuery, limit = 10) {
+  const skuQ = String(skuQuery || "").trim().toUpperCase();
+  const lotQ = String(lotQuery || "").trim().toUpperCase();
+  if (!skuQ && !lotQ) return [];
+
+  return lots
+    .filter((l) => {
+      const qty = parseNumberLike(l.qty);
+      if (qty <= 0) return false;
+      if (skuQ && !String(l.sku || "").toUpperCase().includes(skuQ)) return false;
+      if (lotQ && !String(l.lot || "").toUpperCase().includes(lotQ)) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const ageDiff = parseNumberLike(b.agingDays) - parseNumberLike(a.agingDays);
+      if (ageDiff !== 0) return ageDiff;
+      const recvA = a.receivedDate || "9999-12-31";
+      const recvB = b.receivedDate || "9999-12-31";
+      const recvDiff = recvA.localeCompare(recvB);
+      if (recvDiff !== 0) return recvDiff;
+      return String(a.slotId || "").localeCompare(String(b.slotId || ""));
+    })
+    .slice(0, limit);
 }
 
 function suggestDispatchStageTarget(lot, lots) {
@@ -638,7 +801,7 @@ function suggestDispatchStageTarget(lot, lots) {
   const sameSkuStage = lots.filter(
     (x) =>
       x.id !== lot.id &&
-      (x.zone === "P" || x.zone === "Q") &&
+      x.zone === "Q" &&
       x.qty > 0 &&
       x.status !== "Complete" &&
       String(x.sku).trim().toUpperCase() === String(lot.sku).trim().toUpperCase()
@@ -674,8 +837,8 @@ function suggestDispatchStageTarget(lot, lots) {
     label: getSlotLabel(slotId, deriveZoneFromSlot(slotId)),
     reason:
       sameSkuStage.length > 0
-        ? "ใกล้รหัสสินค้าเดียวกันใน staging"
-        : "ช่อง staging ว่าง",
+        ? "ใกล้รหัสสินค้าเดียวกันในโซน Q"
+        : "ช่องว่างในโซน Q",
   }));
 }
 
@@ -695,7 +858,7 @@ export default function App() {
 
   const [inboundForm, setInboundForm] = useState({
     sku: "",
-    productType: "fg",
+    productType: "semi-fg",
     receivedDate: "",
     lotNo: "",
     stockQty: "",
@@ -708,8 +871,11 @@ export default function App() {
     sku: "",
     lotNo: "",
     dispatchQty: "",
-    productType: "fg",
+    productType: "semi-fg",
   });
+  const [skuLookupQuery, setSkuLookupQuery] = useState("");
+  const [skuLookupLotQuery, setSkuLookupLotQuery] = useState("");
+  const [skuLookupResults, setSkuLookupResults] = useState([]);
   const [dispatchResults, setDispatchResults] = useState([]);
   const [selectedDispatchLot, setSelectedDispatchLot] = useState(null);
   const [dispatchModalOpen, setDispatchModalOpen] = useState(false);
@@ -764,9 +930,9 @@ export default function App() {
   }, [pendingScrollSlotId, selectedZone]);
 
   const stats = useMemo(() => {
-    const storageLots = displayLots.filter((l) => !["Q", "P"].includes(l.zone));
+    const storageLots = displayLots.filter((l) => !DISPATCH_ONLY_ZONES.includes(l.zone));
     const stagedLots = displayLots.filter(
-      (l) => ["Q", "P"].includes(l.zone) && l.status !== "Complete"
+      (l) => DISPATCH_ONLY_ZONES.includes(l.zone) && l.status !== "Complete"
     );
     return {
       totalLots: displayLots.filter((l) => l.status !== "Complete").length,
@@ -817,6 +983,9 @@ export default function App() {
       SlotId: lot.slotId,
       รหัสตำแหน่ง: lot.locationCode,
       สถานะ: lot.status || "",
+      AgingDays: lot.agingDays ?? "",
+      ReceivedDate: lot.receivedDate || "",
+      MFGDate: lot.mfgDate || "",
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
@@ -853,9 +1022,7 @@ export default function App() {
 
     const draggedLot = displayLots.find((l) => l.id === draggingLotId);
     if (!draggedLot) return;
-    if (draggedLot.zone !== selectedZone) return;
     if (draggedLot.slotId === toSlotId) return;
-    if (zoneCfg?.usage === "dispatch_only") return;
 
     setPendingMoves((prev) => {
       const others = prev.filter((m) => m.lotId !== draggingLotId);
@@ -890,11 +1057,11 @@ export default function App() {
     }
 
     const mfgDate = parseMfgFromLot(inboundForm.lotNo);
-    const agingDays = calcAgingDays(mfgDate, inboundForm.receivedDate);
-    const stockQty = Number(inboundForm.stockQty) || 0;
+    const agingDays = calcCurrentAgingDays(mfgDate, inboundForm.receivedDate || getTodayIsoDate());
+    const stockQty = parseNumberLike(inboundForm.stockQty);
 
     const buckets = makeAgingBuckets(agingDays, stockQty);
-    const candidates = findTopSuggestedPallets(
+    const candidates = findTopSuggestedLocations(
       {
         sku: inboundForm.sku,
         productType: inboundForm.productType,
@@ -935,7 +1102,7 @@ export default function App() {
     setSelectedInboundCandidate(null);
   }
 
-  function confirmInboundToSelectedPallet() {
+  function confirmInboundToSelectedLocation() {
     if (!inboundResult || !selectedInboundCandidate) return;
 
     const newLot = {
@@ -951,13 +1118,16 @@ export default function App() {
       zone: selectedInboundCandidate.zone,
       status: "stored",
       productType: inboundResult.productType,
+      receivedDate: inboundResult.receivedDate,
+      mfgDate: toIsoDate(inboundResult.mfgDate),
+      agingDays: inboundResult.agingDays,
     };
 
     setLots((prev) => [...prev, newLot]);
 
     setInboundForm({
       sku: "",
-      productType: "fg",
+      productType: "semi-fg",
       receivedDate: "",
       lotNo: "",
       stockQty: "",
@@ -972,12 +1142,26 @@ export default function App() {
     setDispatchForm((prev) => ({ ...prev, [field]: value }));
   }
 
+  function runSkuLookupSearch() {
+    setSkuLookupResults(searchSkuViewLots(displayLots, skuLookupQuery, skuLookupLotQuery));
+  }
+
+  function closeSkuLookupResults() {
+    setSkuLookupResults([]);
+  }
+
+  function selectSkuLookupLot(lot) {
+    if (!lot || !lot.zone || !lot.slotId) return;
+    setSelectedZone(lot.zone);
+    setSelectedSlotId(lot.slotId);
+    setPendingScrollSlotId(lot.slotId);
+  }
+
   function runDispatchSearch() {
     const results = searchDispatchLots(
       displayLots,
       dispatchForm.sku,
       dispatchForm.lotNo,
-      dispatchForm.productType,
       dispatchForm.dispatchQty
     );
     setDispatchResults(results);
@@ -1006,6 +1190,10 @@ export default function App() {
     setSelectedDispatchLot(null);
   }
 
+  function closeDispatchPlan() {
+    setDispatchPlan(null);
+  }
+
   function prepareDispatchAction(actionValue) {
     if (!selectedDispatchLot) return;
 
@@ -1015,10 +1203,10 @@ export default function App() {
     setSelectedSlotId(lot.slotId);
 
     if (actionValue === "dispatch_out") {
-      const requestedQty = Number(dispatchForm.dispatchQty);
-      const safeDispatchQty = !Number.isNaN(requestedQty) && requestedQty > 0
-        ? Math.min(requestedQty, lot.qty)
-        : lot.qty;
+      const requestedQty = parseNumberLike(dispatchForm.dispatchQty);
+      const safeDispatchQty = requestedQty > 0
+        ? Math.min(requestedQty, parseNumberLike(lot.qty))
+        : parseNumberLike(lot.qty);
 
       setDispatchPlan({
         lotId: lot.id,
@@ -1036,7 +1224,7 @@ export default function App() {
       return;
     }
 
-    if (actionValue === "move_to_stage") {
+    if (actionValue === "move_to_q") {
       const candidates = suggestDispatchStageTarget(lot, displayLots);
       setDispatchPlan({
         lotId: lot.id,
@@ -1045,8 +1233,27 @@ export default function App() {
         currentZone: lot.zone,
         currentSlotId: lot.slotId,
         currentLabel: getSlotLabel(lot.slotId, lot.zone),
-        action: "move_to_stage",
+        action: "move_to_q",
         candidates,
+        manualLocationInput: "",
+        manualLocationError: "",
+      });
+      return;
+    }
+
+    if (actionValue === "move_to_other_location") {
+      const candidates = findSuggestedOtherLocationsForLot(lot, displayLots);
+      setDispatchPlan({
+        lotId: lot.id,
+        sku: lot.sku,
+        lotNo: lot.lot,
+        currentZone: lot.zone,
+        currentSlotId: lot.slotId,
+        currentLabel: getSlotLabel(lot.slotId, lot.zone),
+        action: "move_to_other_location",
+        candidates,
+        manualLocationInput: "",
+        manualLocationError: "",
       });
     }
   }
@@ -1056,12 +1263,12 @@ export default function App() {
       if (!prev || prev.action !== "dispatch_out") return prev;
       if (value === "") return { ...prev, dispatchQty: "" };
 
-      const numericValue = Number(value);
-      if (Number.isNaN(numericValue)) return prev;
+      const numericValue = parseNumberLike(value);
+      if (numericValue <= 0) return { ...prev, dispatchQty: "" };
 
       return {
         ...prev,
-        dispatchQty: Math.max(0, Math.min(prev.maxQty, numericValue)),
+        dispatchQty: Math.max(0, Math.min(parseNumberLike(prev.maxQty), numericValue)),
       };
     });
   }
@@ -1070,23 +1277,75 @@ export default function App() {
     setDispatchPlan((prev) => ({
       ...prev,
       selectedCandidate: candidate,
+      manualLocationError: "",
     }));
     setSelectedZone(candidate.zone);
     setSelectedSlotId(candidate.slotId);
+    setPendingScrollSlotId(candidate.slotId);
+  }
+
+  function updateDispatchManualLocationInput(value) {
+    setDispatchPlan((prev) => (
+      prev
+        ? { ...prev, manualLocationInput: value, manualLocationError: "" }
+        : prev
+    ));
+  }
+
+  function applyDispatchManualLocation() {
+    if (!dispatchPlan || !selectedDispatchLot) return;
+    const candidate = buildManualMoveCandidate(
+      selectedDispatchLot,
+      dispatchPlan.manualLocationInput,
+      displayLots,
+      dispatchPlan.action
+    );
+
+    if (candidate.error) {
+      setDispatchPlan((prev) => ({ ...prev, manualLocationError: candidate.error }));
+      return;
+    }
+
+    pickDispatchCandidate(candidate);
+  }
+
+  function updateSlotManualLocationInput(value) {
+    setSlotActionPlan((prev) => (
+      prev
+        ? { ...prev, manualLocationInput: value, manualLocationError: "" }
+        : prev
+    ));
+  }
+
+  function applySlotManualLocation(lot) {
+    if (!slotActionPlan || !lot) return;
+    const candidate = buildManualMoveCandidate(
+      lot,
+      slotActionPlan.manualLocationInput,
+      displayLots,
+      slotActionPlan.action
+    );
+
+    if (candidate.error) {
+      setSlotActionPlan((prev) => ({ ...prev, manualLocationError: candidate.error }));
+      return;
+    }
+
+    pickSlotActionCandidate(candidate);
   }
 
   function confirmDispatchAction() {
     if (!dispatchPlan) return;
 
     if (dispatchPlan.action === "dispatch_out") {
-      const dispatchQty = Number(dispatchPlan.dispatchQty);
-      if (!dispatchQty || dispatchQty <= 0 || dispatchQty > dispatchPlan.maxQty) return;
+      const dispatchQty = parseNumberLike(dispatchPlan.dispatchQty);
+      if (!dispatchQty || dispatchQty <= 0 || dispatchQty > parseNumberLike(dispatchPlan.maxQty)) return;
 
       const nextLots = lots
         .map((lot) => {
           if (lot.id !== dispatchPlan.lotId) return lot;
 
-          const remainingQty = lot.qty - dispatchQty;
+          const remainingQty = parseNumberLike(lot.qty) - dispatchQty;
           if (remainingQty <= 0) return null;
 
           return {
@@ -1107,7 +1366,6 @@ export default function App() {
           refreshedLots,
           dispatchForm.sku,
           dispatchForm.lotNo,
-          dispatchForm.productType,
           dispatchForm.dispatchQty
         )
       );
@@ -1136,7 +1394,7 @@ export default function App() {
           nextZone
         ),
         status:
-          nextZone === "P" || nextZone === "Q"
+          nextZone === "Q"
             ? "Waiting to be Dispatch"
             : lot.status,
       };
@@ -1155,7 +1413,7 @@ export default function App() {
         refreshedLots,
         dispatchForm.sku,
         dispatchForm.lotNo,
-        dispatchForm.productType
+        dispatchForm.dispatchQty
       )
     );
   }
@@ -1195,6 +1453,10 @@ export default function App() {
     }
   }
 
+  function closeSlotActionPlan() {
+    setSlotActionPlan(null);
+  }
+
   function prepareSlotAction(lot, actionValue) {
     if (!lot) return;
 
@@ -1209,34 +1471,30 @@ export default function App() {
       return;
     }
 
-    if (actionValue === "move_to_fg") {
-      const candidates = findTopSuggestedPallets(
-        {
-          sku: lot.sku,
-          productType: "fg",
-          stockQty: lot.qty,
-        },
-        displayLots.filter((x) => x.id !== lot.id)
-      ).filter((c) => c.zone === "E" || c.zone === "F");
-
+    if (actionValue === "move_to_q") {
+      const candidates = suggestDispatchStageTarget(lot, displayLots);
       setSlotActionPlan({
         lotId: lot.id,
-        action: "move_to_fg",
+        action: "move_to_q",
         currentLabel: getSlotLabel(lot.slotId, lot.zone),
         currentZone: lot.zone,
         candidates,
+        manualLocationInput: "",
+        manualLocationError: "",
       });
       return;
     }
 
-    if (actionValue === "move_to_stage") {
-      const candidates = suggestDispatchStageTarget(lot, displayLots);
+    if (actionValue === "move_to_other_location") {
+      const candidates = findSuggestedOtherLocationsForLot(lot, displayLots);
       setSlotActionPlan({
         lotId: lot.id,
-        action: "move_to_stage",
+        action: "move_to_other_location",
         currentLabel: getSlotLabel(lot.slotId, lot.zone),
         currentZone: lot.zone,
         candidates,
+        manualLocationInput: "",
+        manualLocationError: "",
       });
     }
   }
@@ -1245,9 +1503,11 @@ export default function App() {
     setSlotActionPlan((prev) => ({
       ...prev,
       selectedCandidate: candidate,
+      manualLocationError: "",
     }));
     setSelectedZone(candidate.zone);
     setSelectedSlotId(candidate.slotId);
+    setPendingScrollSlotId(candidate.slotId);
 
     requestAnimationFrame(() => {
       const el = document.getElementById("warehouse-layout-section");
@@ -1279,7 +1539,7 @@ export default function App() {
             nextZone
           ),
           status:
-            nextZone === "P" || nextZone === "Q"
+            nextZone === "Q"
               ? "Waiting to be Dispatch"
               : lot.status,
         };
@@ -1316,21 +1576,32 @@ export default function App() {
             inboundModalOpen={inboundModalOpen}
             chooseInboundCandidate={chooseInboundCandidate}
             closeInboundModal={closeInboundModal}
-            confirmInboundToSelectedPallet={confirmInboundToSelectedPallet}
+            confirmInboundToSelectedLocation={confirmInboundToSelectedLocation}
           />
 
           <DispatchSection
             dispatchForm={dispatchForm}
             updateDispatchField={updateDispatchField}
+            skuLookupQuery={skuLookupQuery}
+            setSkuLookupQuery={setSkuLookupQuery}
+            skuLookupLotQuery={skuLookupLotQuery}
+            setSkuLookupLotQuery={setSkuLookupLotQuery}
+            skuLookupResults={skuLookupResults}
+            runSkuLookupSearch={runSkuLookupSearch}
+            closeSkuLookupResults={closeSkuLookupResults}
+            selectSkuLookupLot={selectSkuLookupLot}
             runDispatchSearch={runDispatchSearch}
             dispatchResults={dispatchResults}
             selectedDispatchLot={selectedDispatchLot}
             dispatchModalOpen={dispatchModalOpen}
             selectDispatchLot={selectDispatchLot}
             closeDispatchModal={closeDispatchModal}
+            closeDispatchPlan={closeDispatchPlan}
             prepareDispatchAction={prepareDispatchAction}
             dispatchPlan={dispatchPlan}
             pickDispatchCandidate={pickDispatchCandidate}
+            updateDispatchManualLocationInput={updateDispatchManualLocationInput}
+            applyDispatchManualLocation={applyDispatchManualLocation}
             confirmDispatchAction={confirmDispatchAction}
             updateDispatchQty={updateDispatchQty}
           />
@@ -1357,6 +1628,9 @@ export default function App() {
               prepareSlotAction={prepareSlotAction}
               slotActionPlan={slotActionPlan}
               pickSlotActionCandidate={pickSlotActionCandidate}
+              updateSlotManualLocationInput={updateSlotManualLocationInput}
+              applySlotManualLocation={applySlotManualLocation}
+              closeSlotActionPlan={closeSlotActionPlan}
               confirmSlotAction={confirmSlotAction}
               deleteLot={deleteLot}
             />
@@ -1402,11 +1676,7 @@ export default function App() {
           </div>
 
           <div style={dragHintStyle}>
-            {zoneCfg.usage === "dispatch_only" ? (
-              <span>Zone นี้เป็น staging/dispatch จึงล็อก drag & drop ไว้</span>
-            ) : (
-              <span>ลาก lot card ไปยัง pallet/slot ใหม่ได้เลย แล้วกด <strong>Save Layout Changes</strong> เพื่อยืนยันการเปลี่ยน layout</span>
-            )}
+            <span>ลาก lot card ไปยัง location/slot ใหม่ได้เลย แล้วกด <strong>Save Layout Changes</strong> เพื่อยืนยันการเปลี่ยน layout</span>
           </div>
 
           <div style={cardStyle}>
@@ -1444,6 +1714,10 @@ export default function App() {
                 lots={zoneLots}
                 selectedSlotId={selectedSlotId}
                 setSelectedSlotId={setSelectedSlotId}
+                draggingLotId={draggingLotId}
+                setDraggingLotId={setDraggingLotId}
+                onDropLot={addPendingMove}
+                pendingMoves={pendingMoves}
               />
             )}
           </div>
@@ -1504,7 +1778,7 @@ function InboundSection({
   inboundModalOpen,
   chooseInboundCandidate,
   closeInboundModal,
-  confirmInboundToSelectedPallet,
+  confirmInboundToSelectedLocation,
 }) {
   return (
     <div style={cardStyle}>
@@ -1512,7 +1786,7 @@ function InboundSection({
         <div>
           <h2 style={{ margin: 0 }}>Inbound</h2>
           <div style={{ color: "#475569", marginTop: 6, fontSize: 14 }}>
-            ใส่ข้อมูลรับเข้าแล้วระบบจะ suggest pallet ที่เหมาะสม
+            ใส่ข้อมูลรับเข้าแล้วระบบจะ suggest location ที่เหมาะสม
           </div>
         </div>
         <div style={headerIconBadgeStyle}>
@@ -1532,17 +1806,6 @@ function InboundSection({
           />
         </label>
 
-        <label style={fieldStyle}>
-          <span>ประเภทสินค้า</span>
-          <select
-            value={inboundForm.productType}
-            onChange={(e) => updateInboundField("productType", e.target.value)}
-            style={inputStyle}
-          >
-            <option value="fg">FG</option>
-            <option value="semi-fg">Semi-FG</option>
-          </select>
-        </label>
 
         <label style={fieldStyle}>
           <span>Received Date</span>
@@ -1578,7 +1841,7 @@ function InboundSection({
         <div style={{ display: "flex", alignItems: "end" }}>
           <button onClick={saveInbound} style={primaryBtnStyle}>
             <Search size={14} />
-            Suggest Pallet
+            Suggest Location
           </button>
         </div>
       </div>
@@ -1595,7 +1858,7 @@ function InboundSection({
           </div>
 
           <div style={{ marginTop: 14 }}>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Choose 1 pallet</div>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Choose 1 location</div>
             <div style={{ display: "grid", gap: 10 }}>
               {inboundResult.candidates?.length ? (
                 inboundResult.candidates.map((candidate, idx) => (
@@ -1624,7 +1887,7 @@ function InboundSection({
                   </button>
                 ))
               ) : (
-                <div style={{ color: "#64748b" }}>ไม่พบ pallet ที่เหมาะสม</div>
+                <div style={{ color: "#64748b" }}>ไม่พบ location ที่เหมาะสม</div>
               )}
             </div>
           </div>
@@ -1638,7 +1901,7 @@ function InboundSection({
             <div style={modalHeaderStyle}>
               <div>
                 <div style={{ fontSize: 12, color: "#64748b", fontWeight: 700 }}>INBOUND CONFIRM</div>
-                <div style={{ fontSize: 20, fontWeight: 800, marginTop: 4 }}>ยืนยันจัดเก็บที่ pallet นี้</div>
+                <div style={{ fontSize: 20, fontWeight: 800, marginTop: 4 }}>ยืนยันจัดเก็บที่ location นี้</div>
               </div>
 
               <button onClick={closeInboundModal} style={modalCloseBtnStyle}>
@@ -1660,21 +1923,21 @@ function InboundSection({
                 <div style={modalInfoValueStyle}>{inboundResult?.productType}</div>
               </div>
               <div style={modalInfoItemStyle}>
-                <div style={modalInfoLabelStyle}>Target pallet</div>
+                <div style={modalInfoLabelStyle}>Target location</div>
                 <div style={modalInfoValueStyle}>{selectedInboundCandidate.label}</div>
               </div>
             </div>
 
             <div style={{ marginTop: 14, color: "#475569", fontSize: 14 }}>
-              ระบบเลือก pallet นี้ไว้แล้ว คุณกดดูโซนที่แนะนำได้จากแผนที่หรือยืนยันจัดเก็บได้ทันที
+              ระบบเลือก location นี้ไว้แล้ว คุณกดดูโซนที่แนะนำได้จากแผนที่หรือยืนยันจัดเก็บได้ทันที
             </div>
 
             <div style={modalActionRowStyle}>
               <button onClick={closeInboundModal} style={secondaryBtnStyle}>
                 ยกเลิก
               </button>
-              <button onClick={confirmInboundToSelectedPallet} style={primaryBtnStyle}>
-                ยืนยันจัดเก็บที่พาเลตนี้
+              <button onClick={confirmInboundToSelectedLocation} style={primaryBtnStyle}>
+                ยืนยันจัดเก็บที่ location นี้
               </button>
             </div>
           </div>
@@ -1692,15 +1955,26 @@ function InboundSection({
 function DispatchSection({
   dispatchForm,
   updateDispatchField,
+  skuLookupQuery,
+  setSkuLookupQuery,
+  skuLookupLotQuery,
+  setSkuLookupLotQuery,
+  skuLookupResults,
+  runSkuLookupSearch,
+  closeSkuLookupResults,
+  selectSkuLookupLot,
   runDispatchSearch,
   dispatchResults,
   selectedDispatchLot,
   dispatchModalOpen,
   selectDispatchLot,
   closeDispatchModal,
+  closeDispatchPlan,
   prepareDispatchAction,
   dispatchPlan,
   pickDispatchCandidate,
+  updateDispatchManualLocationInput,
+  applyDispatchManualLocation,
   confirmDispatchAction,
   updateDispatchQty,
 }) {
@@ -1710,7 +1984,7 @@ function DispatchSection({
         <div>
           <h2 style={{ margin: 0 }}>Dispatch</h2>
           <div style={{ color: "#475569", marginTop: 6, fontSize: 14 }}>
-            ค้นหาจากรหัสสินค้า ล็อตสินค้า และจำนวนที่ต้องการเบิก แล้วเลือก FG / Semi-FG เพื่อเปิดเมนูทำรายการได้ทันที
+            ค้นหาจากรหัสสินค้า ล็อตสินค้า และจำนวนที่ต้องการเบิก แล้วเลือกทำรายการได้ทันที
           </div>
         </div>
       </div>
@@ -1748,17 +2022,6 @@ function DispatchSection({
           />
         </label>
 
-        <label style={fieldStyle}>
-          <span>ประเภทสินค้า</span>
-          <select
-            value={dispatchForm.productType}
-            onChange={(e) => updateDispatchField("productType", e.target.value)}
-            style={inputStyle}
-          >
-            <option value="fg">FG</option>
-            <option value="semi-fg">Semi-FG</option>
-          </select>
-        </label>
 
         <div style={{ display: "flex", alignItems: "end" }}>
           <button onClick={runDispatchSearch} style={primaryBtnStyle}>
@@ -1766,6 +2029,85 @@ function DispatchSection({
             Search Dispatch
           </button>
         </div>
+      </div>
+
+
+      <div
+        style={{
+          marginTop: 22,
+          border: "1px solid #cbd5e1",
+          background: "#f8fafc",
+          borderRadius: 14,
+          padding: 16,
+        }}
+      >
+        <div style={{ fontWeight: 800, marginBottom: 6 }}>Stock Lookup </div>
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
+          ใช้สำหรับค้นหาดูตำแหน่งสินค้า
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr)) auto", gap: 10, alignItems: "end" }}>
+          <label style={fieldStyle}>
+            <span>ค้นหา SKU</span>
+            <input
+              value={skuLookupQuery}
+              onChange={(e) => setSkuLookupQuery(e.target.value)}
+              style={inputStyle}
+              placeholder="เช่น BBLA047-1"
+            />
+          </label>
+
+          <label style={fieldStyle}>
+            <span>ค้นหาล็อตสินค้า</span>
+            <input
+              value={skuLookupLotQuery}
+              onChange={(e) => setSkuLookupLotQuery(e.target.value)}
+              style={inputStyle}
+              placeholder="เช่น 17014"
+            />
+          </label>
+
+          <div style={{ fontSize: 12, color: "#64748b", paddingBottom: 8 }}>
+            ใส่อย่างใดอย่างหนึ่งหรือใส่ทั้งสองช่องก็ได้
+          </div>
+
+          <div style={{ display: "flex", gap: 8, alignItems: "end", justifyContent: "flex-end" }}>
+            <button onClick={runSkuLookupSearch} style={secondaryBtnStyle}>
+              <Search size={14} />
+              Search Stock
+            </button>
+            {skuLookupResults.length > 0 ? (
+              <button onClick={closeSkuLookupResults} style={secondaryBtnStyle}>Close</button>
+            ) : null}
+          </div>
+        </div>
+
+        {skuLookupResults.length > 0 ? (
+          <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+            {skuLookupResults.map((lot) => (
+              <button
+                key={`sku-view-${lot.id}`}
+                onClick={() => selectSkuLookupLot(lot)}
+                style={{ ...dispatchLotCardStyle, textAlign: "left", width: "100%", cursor: "pointer" }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 800 }}>{lot.sku}</div>
+                    <div style={{ color: "#475569", fontSize: 13, marginTop: 4 }}>
+                      ล็อตสินค้า: {lot.lot} · Qty: {lot.qty}
+                    </div>
+                    <div style={{ color: "#0f766e", fontSize: 12, marginTop: 4, fontWeight: 700 }}>
+                      Aging: {lot.agingDays || 0} days · FIFO แนะนำลำดับต้น ๆ
+                    </div>
+                    <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>
+                      {getSlotLabel(lot.slotId, lot.zone)} · Zone {lot.zone} · Received {formatDateDisplay(lot.receivedDate) || "-"}
+                    </div>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {dispatchResults.length > 0 && (
@@ -1807,7 +2149,7 @@ function DispatchSection({
                     </div>
                   </div>
 
-                  {(lot.zone === "P" || lot.zone === "Q") && (
+                  {(lot.zone === "Q") && (
                     <div style={statusPillStyle}>{lot.status || "Waiting to be Dispatch"}</div>
                   )}
                 </div>
@@ -1849,8 +2191,11 @@ function DispatchSection({
               <button onClick={() => prepareDispatchAction("dispatch_out")} style={secondaryBtnStyle}>
                 Dispatch Out
               </button>
-              <button onClick={() => prepareDispatchAction("move_to_stage")} style={secondaryBtnStyle}>
-                Move to P / Q1 / Q2
+              <button onClick={() => prepareDispatchAction("move_to_q")} style={secondaryBtnStyle}>
+                Move to Q
+              </button>
+              <button onClick={() => prepareDispatchAction("move_to_other_location")} style={secondaryBtnStyle}>
+                Move to Other Location
               </button>
             </div>
 
@@ -1863,7 +2208,7 @@ function DispatchSection({
                 <div style={{ display: "grid", gap: 10 }}>
                   <div style={modalInfoGridStyle}>
                     <div style={suggestMetaItemStyle}>จำนวนคงเหลือ: <strong>{dispatchPlan.maxQty}</strong></div>
-                    <div style={suggestMetaItemStyle}>จำนวนคงเหลือหลังจ่าย: <strong>{Math.max(0, (Number(dispatchPlan.maxQty) || 0) - (Number(dispatchPlan.dispatchQty) || 0))}</strong></div>
+                    <div style={suggestMetaItemStyle}>จำนวนคงเหลือหลังจ่าย: <strong>{Math.max(0, parseNumberLike(dispatchPlan.maxQty) - parseNumberLike(dispatchPlan.dispatchQty))}</strong></div>
                   </div>
 
                   <label style={{ display: "grid", gap: 6 }}>
@@ -1893,22 +2238,22 @@ function DispatchSection({
                   onClick={confirmDispatchAction}
                   disabled={
                     !dispatchPlan.dispatchQty ||
-                    Number(dispatchPlan.dispatchQty) <= 0 ||
-                    Number(dispatchPlan.dispatchQty) > Number(dispatchPlan.maxQty)
+                    parseNumberLike(dispatchPlan.dispatchQty) <= 0 ||
+                    parseNumberLike(dispatchPlan.dispatchQty) > parseNumberLike(dispatchPlan.maxQty)
                   }
                   style={{
                     ...primaryBtnStyle,
                     marginTop: 12,
                     opacity:
                       !dispatchPlan.dispatchQty ||
-                      Number(dispatchPlan.dispatchQty) <= 0 ||
-                      Number(dispatchPlan.dispatchQty) > Number(dispatchPlan.maxQty)
+                      parseNumberLike(dispatchPlan.dispatchQty) <= 0 ||
+                      parseNumberLike(dispatchPlan.dispatchQty) > parseNumberLike(dispatchPlan.maxQty)
                         ? 0.5
                         : 1,
                     cursor:
                       !dispatchPlan.dispatchQty ||
-                      Number(dispatchPlan.dispatchQty) <= 0 ||
-                      Number(dispatchPlan.dispatchQty) > Number(dispatchPlan.maxQty)
+                      parseNumberLike(dispatchPlan.dispatchQty) <= 0 ||
+                      parseNumberLike(dispatchPlan.dispatchQty) > parseNumberLike(dispatchPlan.maxQty)
                         ? "not-allowed"
                         : "pointer",
                   }}
@@ -1918,13 +2263,38 @@ function DispatchSection({
               </div>
             )}
 
-            {dispatchPlan?.action === "move_to_stage" && (
+            {(dispatchPlan?.action === "move_to_q" || dispatchPlan?.action === "move_to_other_location") && (
               <div style={confirmBoxStyle}>
-                <div style={{ color: "#475569", marginBottom: 10 }}>
-                  เลือกตำแหน่ง staging ปลายทาง
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}>
+                  <div style={{ color: "#475569" }}>
+                    {dispatchPlan.action === "move_to_q" ? "เลือกตำแหน่งปลายทางใน Q" : "เลือก location ปลายทางตาม SKU ที่ใกล้เคียง"}
+                  </div>
+                  <button type="button" onClick={closeDispatchPlan} style={secondaryBtnStyle}>Close</button>
                 </div>
 
-                <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {dispatchPlan.action === "move_to_other_location" && (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <label style={{ display: "grid", gap: 6 }}>
+                        <span style={{ fontWeight: 700, color: "#0f172a" }}>กรอก Location เอง</span>
+                        <input
+                          value={dispatchPlan.manualLocationInput || ""}
+                          onChange={(e) => updateDispatchManualLocationInput(e.target.value)}
+                          placeholder="เช่น A125L หรือ E12(3)"
+                          style={inputStyle}
+                        />
+                      </label>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button type="button" onClick={applyDispatchManualLocation} style={secondaryBtnStyle}>
+                          Go to Location
+                        </button>
+                      </div>
+                      {dispatchPlan.manualLocationError ? (
+                        <div style={{ color: "#b91c1c", fontSize: 12 }}>{dispatchPlan.manualLocationError}</div>
+                      ) : null}
+                    </div>
+                  )}
+
                   {dispatchPlan.candidates?.length ? (
                     dispatchPlan.candidates.map((candidate) => (
                       <button
@@ -1950,7 +2320,7 @@ function DispatchSection({
                       </button>
                     ))
                   ) : (
-                    <div style={{ color: "#64748b" }}>ไม่พบช่อง staging ว่าง</div>
+                    <div style={{ color: "#64748b" }}>{dispatchPlan.action === "move_to_q" ? "ไม่พบช่องว่างใน Q" : "ไม่พบ location ปลายทางที่เหมาะสม"}</div>
                   )}
                 </div>
 
@@ -2042,6 +2412,9 @@ function SlotDetailPanel({
   prepareSlotAction,
   slotActionPlan,
   pickSlotActionCandidate,
+  updateSlotManualLocationInput,
+  applySlotManualLocation,
+  closeSlotActionPlan,
   confirmSlotAction,
   deleteLot,
 }) {
@@ -2052,7 +2425,7 @@ function SlotDetailPanel({
           <div>
             <h2 style={{ margin: 0 }}>Selected Slot Detail</h2>
             <div style={{ color: "#64748b", marginTop: 6, fontSize: 14 }}>
-              เลือก pallet จาก warehouse layout
+              เลือก location จาก warehouse layout
             </div>
           </div>
         </div>
@@ -2077,9 +2450,8 @@ function SlotDetailPanel({
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
           {lots.map((lot) => {
-            const isStorageNormal = !["E", "F", "Q", "P"].includes(lot.zone);
-            const isEF = ["E", "F"].includes(lot.zone);
-            const isStage = ["Q", "P"].includes(lot.zone);
+            const isStage = ["Q"].includes(lot.zone);
+            const canMoveLocation = !isStage;
 
             return (
               <div key={lot.id} style={miniLotCardStyle}>
@@ -2089,6 +2461,15 @@ function SlotDetailPanel({
                 </div>
                 <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
                   Qty: {lot.qty}
+                </div>
+                <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
+                  Aging: <strong>{lot.agingDays ?? "-"}</strong> days
+                </div>
+                <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
+                  Received Date: {formatDateDisplay(lot.receivedDate) || "-"}
+                </div>
+                <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
+                  MFG Date: {formatDateDisplay(lot.mfgDate) || "-"}
                 </div>
                 <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
                   Zone: {lot.zone} · Location: {lot.locationCode}
@@ -2119,30 +2500,21 @@ function SlotDetailPanel({
                     Dispatch Out
                   </button>
 
-                  {isStorageNormal && (
+                  {canMoveLocation && (
                     <>
                       <button
-                        onClick={() => prepareSlotAction?.(lot, "move_to_fg")}
+                        onClick={() => prepareSlotAction?.(lot, "move_to_q")}
                         style={secondaryBtnStyle}
                       >
-                        Move to E / F
+                        Move to Q
                       </button>
                       <button
-                        onClick={() => prepareSlotAction?.(lot, "move_to_stage")}
+                        onClick={() => prepareSlotAction?.(lot, "move_to_other_location")}
                         style={secondaryBtnStyle}
                       >
-                        Move to Q / P
+                        Move to Other Location
                       </button>
                     </>
-                  )}
-
-                  {isEF && (
-                    <button
-                      onClick={() => prepareSlotAction?.(lot, "move_to_stage")}
-                      style={secondaryBtnStyle}
-                    >
-                      Move to Q / P
-                    </button>
                   )}
 
                   <button
@@ -2170,14 +2542,39 @@ function SlotDetailPanel({
                 )}
 
                 {slotActionPlan?.lotId === lot.id &&
-                  (slotActionPlan.action === "move_to_fg" ||
-                    slotActionPlan.action === "move_to_stage") && (
+                  (slotActionPlan.action === "move_to_q" ||
+                    slotActionPlan.action === "move_to_other_location") && (
                     <div style={confirmBoxStyle}>
-                      <div style={{ color: "#475569", marginBottom: 10 }}>
-                        เลือกปลายทาง
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}>
+                        <div style={{ color: "#475569" }}>
+                          {slotActionPlan.action === "move_to_q" ? "เลือกปลายทางใน Q" : "เลือก location ปลายทางตาม SKU ที่คล้ายกัน"}
+                        </div>
+                        <button type="button" onClick={() => closeSlotActionPlan?.()} style={secondaryBtnStyle}>Close</button>
                       </div>
 
-                      <div style={{ display: "grid", gap: 8 }}>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        {slotActionPlan.action === "move_to_other_location" && (
+                          <div style={{ display: "grid", gap: 8 }}>
+                            <label style={{ display: "grid", gap: 6 }}>
+                              <span style={{ fontWeight: 700, color: "#0f172a" }}>กรอก Location เอง</span>
+                              <input
+                                value={slotActionPlan.manualLocationInput || ""}
+                                onChange={(e) => updateSlotManualLocationInput?.(e.target.value)}
+                                placeholder="เช่น A125L หรือ E12(3)"
+                                style={inputStyle}
+                              />
+                            </label>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <button type="button" onClick={() => applySlotManualLocation?.(lot)} style={secondaryBtnStyle}>
+                                Go to Location
+                              </button>
+                            </div>
+                            {slotActionPlan.manualLocationError ? (
+                              <div style={{ color: "#b91c1c", fontSize: 12 }}>{slotActionPlan.manualLocationError}</div>
+                            ) : null}
+                          </div>
+                        )}
+
                         {slotActionPlan.candidates?.length ? (
                           slotActionPlan.candidates.map((candidate) => (
                             <button
@@ -2247,7 +2644,7 @@ function MultiLevelFlatLRZoneInline({
             <div style={levelHeaderStyle}>Level {level}</div>
             <div style={flatRowWrapStyle}>
               {unitNos.map((unitNo) => {
-                const pairPalette = getPairPalette(unitNo);
+                const pairLocation = getPairLocation(unitNo);
                 const leftId = `${zoneKey}-${level}-${unitNo}-L`;
                 const rightId = `${zoneKey}-${level}-${unitNo}-R`;
 
@@ -2264,7 +2661,7 @@ function MultiLevelFlatLRZoneInline({
                       state={leftState}
                       selected={selectedSlotId === leftId}
                       onSelect={() => setSelectedSlotId(leftId)}
-                      bg={pairPalette.left}
+                      bg={pairLocation.left}
                       draggingLotId={draggingLotId}
                       setDraggingLotId={setDraggingLotId}
                       onDropLot={onDropLot}
@@ -2278,7 +2675,7 @@ function MultiLevelFlatLRZoneInline({
                       state={rightState}
                       selected={selectedSlotId === rightId}
                       onSelect={() => setSelectedSlotId(rightId)}
-                      bg={pairPalette.right}
+                      bg={pairLocation.right}
                       draggingLotId={draggingLotId}
                       setDraggingLotId={setDraggingLotId}
                       onDropLot={onDropLot}
@@ -2346,6 +2743,10 @@ function DispatchZoneInline({
   lots,
   selectedSlotId,
   setSelectedSlotId,
+  draggingLotId,
+  setDraggingLotId,
+  onDropLot,
+  pendingMoves,
 }) {
   return (
     <div style={{ display: "grid", gap: 20 }}>
@@ -2362,29 +2763,22 @@ function DispatchZoneInline({
                 cols.map((colNo) => {
                   const slotId = `${block.key}-${rowNo}-${colNo}`;
                   const state = makeSlotState(slotId, lots);
-                  const isSelected = selectedSlotId === slotId;
 
                   return (
-                    <button
+                    <SlotTile
                       key={slotId}
-                      data-slot-id={slotId}
-                      onClick={() => setSelectedSlotId(slotId)}
-                      title={getSlotLabel(slotId, deriveZoneFromSlot(slotId))}
-                      style={{
-                        ...dispatchCompactCellStyle,
-                        background: isSelected
-                          ? "#dbeafe"
-                          : state.occupied
-                            ? "#0f172a"
-                            : "#f8fafc",
-                        color: state.occupied ? "#fff" : "#0f172a",
-                        border: isSelected
-                          ? "2px solid #2563eb"
-                          : "1px solid #cbd5e1",
-                      }}
-                    >
-                      {`${block.key}${rowNo}(${colNo})`}
-                    </button>
+                      slotId={slotId}
+                      label={getSlotLabel(slotId, deriveZoneFromSlot(slotId))}
+                      state={state}
+                      selected={selectedSlotId === slotId}
+                      onSelect={() => setSelectedSlotId(slotId)}
+                      bg="#f8fafc"
+                      draggingLotId={draggingLotId}
+                      setDraggingLotId={setDraggingLotId}
+                      onDropLot={onDropLot}
+                      pendingMove={pendingMoves.find((m) => m.toSlotId === slotId)}
+                      compact
+                    />
                   );
                 })
               )}
